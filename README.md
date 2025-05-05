@@ -11,12 +11,12 @@ This project focuses on adapting the pretrained **ViCLIP model** for a small-sca
 
 We developed and evaluated the model across three distinct phases:
 1. **Baseline ViCLIP (Zero-Shot Cosine Similarity)**
-2. **First Set of Improvements**: Cross-modal attention and contrastive loss optimization
+2. **First Set of Improvements**: Cross-modal attention, contrastive loss optimization and a cosine gap study
 3. **Second Set of Improvements**: Multimodal fusion and custom frame sampling strategies
 
 ---
 
-## Dataset Construction
+## **[Dataset Construction](scripts/G35_Dataset.ipynb)**
 
 We used the **InternVid-18M-AES** dataset available on HuggingFace. This version was selected due to:
 - **Shorter clip lengths (3–15 seconds)** for faster iteration and lower memory usage.
@@ -33,13 +33,13 @@ The dataset was filtered, clipped, and downloaded using:
   - Generates clean filenames for storage
 
 Final dataset: **50 curated clips**, expandable to 1000+  
-Splits: **80% training**, **10% validation**, **10% test**
+Splits: **80% training**, **10% alignment**, **10% test**
 
 Videos are stored in Google Drive and loaded using a custom PyTorch `VideoCaptionDataset` class.
 
 ---
 
-## Baseline Model
+## **[Baseline Model](scripts/G35_BaselineModel.ipynb)**
 
 The baseline uses **ViCLIP** with pretrained weights from the `ViClip-InternVid-10M-FLT` checkpoint provided by OpenGVLab. ViCLIP is a dual-encoder architecture with independent encoders for:
 - Vision: processes video frames
@@ -57,50 +57,69 @@ We performed a **zero-shot forward pass**:
 | Evaluation Method     | Score                |
 |-----------------------|----------------------|
 | Cosine Similarity Top-1 (Zero-shot) | 0.6278 |
-| Equivalent InfoNCE Validation Loss  | 0.1719 |
+| Equivalent InfoNCE Alignment Loss  | 0.1719 |
 
 ### Why We Switched to Loss Functions
 
-Although cosine similarity gives insight into retrieval quality, it does not enable **gradient-based optimization**. To improve alignment in a learnable way, we switched to **contrastive losses** (InfoNCE and HNAC), which:
+Although cosine similarity gives insight into retrieval quality, it does not enable **gradient-based optimization**. To improve alignment in a learnable way, we switched to **contrastive losses** (InfoNCE and H-NAC), which:
 - Penalize mismatched video-caption pairs
-- Offer a consistent metric for training and validation
+- Offer a consistent metric for training and alignment
 - Allow for better convergence monitoring
 
 ---
 
-## First Set of Improvements: Cross Attention & Contrastive Losses
+## **[First Set of Improvements: Cross-Attention & Contrastive Losses](scripts/G35_First_Improvement.ipynb)**
+
 
 ### Architectural Change: Cross-Attention
 
-We introduced **CrossAttention modules**, allowing:
+We introduced a **Cross-Attention module** between the latent features of the vision and text encoders, allowing:
 - Vision features to attend to text features
 - Text features to attend to vision features
 
-This encourages **cross-modal grounding**, enabling richer interaction between the modalities beyond independent encoding.
 
-### Loss Functions
-We compared two contrastive objectives:
-- **InfoNCE**: standard softmax-based contrastive loss
-- **HNAC (Hard Negative-Aware Contrastive)**: down-weights false negatives using a similarity-based decay function
+### Introduction of a New Loss Function: H-NAC
+
+In addition to the standard **InfoNCE** contrastive loss, we introduced a novel objective— the **H-NAC (Hard Negative-Aware Contrastive) Loss**. This loss explicitly addresses the issue of false negatives during contrastive training:
+- **InfoNCE**: standard softmax-based loss that treats all non-matching pairs as equally negative.
+- **H-NAC**: introduces a similarity-based decay function to down-weight hard false negatives, encouraging more robust learning.
+
+
+### Cosine Gap Analysis
+
+For our **[Cosine Gap Analysis](scripts/Cosine_Gap_Analysis.ipynb)**, we computed the cosine similarity gap to assess how well each loss separates positive from hard negative pairs:
+- The cosine gap is the average similarity difference between true pairs and the hardest sampled negatives.
+- A higher gap indicates better contrastive separation and robustness to false negatives.
 
 ### Results
 
-| Configuration                 | Final Validation Loss  |
-|-------------------------------|------------------------|
-| Baseline (Zero-Shot Cosine)   | 0.1719                 |
-| Default + InfoNCE             | 0.0461                 |
-| Default + HNAC                | 0.0522                 |
-| Cross-Attn + InfoNCE          | 0.0835                 |
-| Cross-Attn + HNAC             | **0.0412**             |
+On the baseline model, we performed a zero-shot forward pass using pre-trained ViCLIP weights and obtained an alignment loss of **0.1719**.
+
+After fine-tuning the baseline and the modified cross-attended model on our AES-InternVid dataset (using both InfoNCE and H-NAC), we achieved:
+
+#### Alignment Loss Results
+
+| Loss Type  | Baseline | Cross-Attn |
+|------------|----------|------------|
+| InfoNCE    | 0.1134   | **0.0835** |
+| H-NAC      | 0.0522   | **0.0412** |
+
+#### Cosine Gap Analysis
+
+| Loss Type  | Cosine Gap |
+|------------|-------------|
+| InfoNCE    | 0.1854      |
+| H-NAC      | **0.2036**  |
 
 ### Takeaways
-- **Fine-tuning alone** greatly improved loss (over 50% drop from baseline)
-- **Cross-attention** offered additional benefit
-- **HNAC outperformed InfoNCE**, especially when paired with attention
+
+- The **Cross-Attention module** enhanced model performance across both the InfoNCE and H-NAC objectives.
+- The **cosine gap analysis** confirmed that H-NAC provides better separation in embedding space, increasing robustness against semantic false negatives.
+
 
 ---
 
-## Second Set of Improvements: Fusion Transformer + Frame Sampling
+## **[Second Set of Improvements: Fusion Transformer + Frame Sampling](scripts/G35_Second_Improvement.ipynb)**
 
 After attention, we explored two further ideas to enhance fine-grained alignment.
 
@@ -124,21 +143,19 @@ With only 8 frames per video, *which* frames are selected becomes critical. We i
 | Weighted   | Samples based on a linear probability ramp (later frames favored) |
 | Dropout    | Randomly drops 30% of frames before sampling from the rest        |
 
-### Results (Validation Loss @ Epoch 10)
+### Results (Alignment Loss @ Epoch 10)
 
-| Strategy   | InfoNCE        | HNAC           |
-|------------|----------------|----------------|
-| Default    | 0.0012         | 0.0005         |
-| Mean       | 0.0011         | **0.0004**     |
-| Keyframes  | 0.0007         | 0.0011         |
-| Weighted   | 0.0016         | 0.0011         |
-| Dropout    | 0.0008         | 0.0013         |
+| Loss Type | Default | Mean         | Keyframes     | Weighted      | Dropout       |
+|-----------|---------|--------------|---------------|---------------|---------------|
+| InfoNCE   | 0.0012  | 0.0011       | **0.0007**        | 0.0016        | 0.0008        |
+| H-NAC      | 0.0005  | **0.0004**   | 0.0011        | 0.0011        | 0.0013        |
+
 
 ### Takeaways
 
-- **Mean frames with HNAC** gave the best result
-- Surprising finding: **Averaged frames may provide consistent global context**, helping model generalize better
-- Even dropout and weighted sampling performed decently, showing the potential for temporal diversity
+- For the InfoNCE objective, **keyframes** gave the best result
+- For the H-NAC objective, **mean** frames gave the best result
+- Dropout and weighted sampling performed decently under the InfoNCE objective, showing the potential for temporal diversity
 
 ---
 
@@ -150,7 +167,7 @@ With only 8 frames per video, *which* frames are selected becomes critical. We i
 | Text Encoder          | From ViCLIP pretrained on InternVid-10M          |
 | CrossAttention (opt)  | Injects query-key-value cross-modality attention |
 | Fusion Transformer    | 4-layer encoder to fuse vision & text embeddings |
-| Loss Functions        | InfoNCE / HNAC                                   |
+| Loss Functions        | InfoNCE / H-NAC                                   |
 | Frame Strategies      | 5 variants tested for temporal robustness        |
 
 ---
@@ -165,7 +182,7 @@ With only 8 frames per video, *which* frames are selected becomes critical. We i
 - Device: CUDA (Google Colab)
 
 Metrics:
-- **Validation loss (contrastive)** was the primary metric
+- **Alignment loss (contrastive)** was the primary metric
 - Tracked convergence across all combinations of fusion and sampling
 
 ---
@@ -179,6 +196,7 @@ Metrics:
    - `G35_BaselineModel.ipynb` — evaluates pretrained ViCLIP using cosine similarity
    - `G35_First_Improvement.ipynb` — introduces attention and loss-based training
    - `G35_Second_Improvement.ipynb` — adds fusion layers and frame sampling
+   - `Cosine_Gap_Analysis.ipynb` - evaluates the effectiveness of the loss functions used in our experiments
 
 Models are saved to Drive, and loss plots are generated after each run.
 
@@ -188,32 +206,37 @@ Models are saved to Drive, and loss plots are generated after each run.
 
 ### Phase 1: Baseline and First Improvements
 
-| Configuration              | Best Validation Loss |
-|----------------------------|----------------------|
-| Baseline (Zero-Shot Cosine)| 0.6278 (cosine sim)  |
-| Baseline (Loss Equivalent) | 0.1719              |
-| Default + InfoNCE          | 0.0461               |
-| Default + HNAC             | 0.0522               |
-| Cross-Attn + InfoNCE       | 0.0835               |
-| Cross-Attn + HNAC          | **0.0412**           |
+
+#### Alignment Loss Results
+
+| Loss Type  | Baseline | Cross-Attn |
+|------------|----------|------------|
+| InfoNCE    | 0.1134   | **0.0835** |
+| H-NAC      | 0.0522   | **0.0412** |
+
+#### Cosine Gap Analysis
+
+| Loss Type  | Cosine Gap |
+|------------|-------------|
+| InfoNCE    | 0.1854      |
+| H-NAC      | **0.2036**  |
+
 
 ### Phase 2: Fusion Transformer + Frame Sampling (Epoch 10)
 
-| Strategy   | InfoNCE Loss   | HNAC Loss      |
-|------------|----------------|----------------|
-| Default    | 0.0012         | 0.0005         |
-| Mean       | 0.0011         | **0.0004**     |
-| Keyframes  | 0.0007         | 0.0011         |
-| Weighted   | 0.0016         | 0.0011         |
-| Dropout    | 0.0008         | 0.0013         |
+| Loss Type | Default | Mean         | Keyframes     | Weighted      | Dropout       |
+|-----------|---------|--------------|---------------|---------------|---------------|
+| InfoNCE   | 0.0012  | 0.0011       | **0.0007**        | 0.0016        | 0.0008        |
+| H-NAC      | 0.0005  | **0.0004**   | 0.0011        | 0.0011        | 0.0013        |
 
 ### Observations
 
-- Transitioning from cosine similarity to trainable contrastive losses (InfoNCE and HNAC) led to **a 2.5–3x improvement** in validation loss.
-- The **Cross-Attention + HNAC** setup outperformed all non-fusion models.
-- Introducing the **Fusion Transformer** and testing **frame strategies** further reduced validation loss by quite alot.
-- The **Mean frame strategy under HNAC** achieved the best overall result: **0.0004**, showing that even heavily averaged frames can be effective when deeply fused.
-
+- In Phase 1, the **Cross-Attention module** improved performance across both loss objectives, demonstrating the benefit of enabling inter-modal interaction at the feature level.
+- The **cosine gap analysis** showed that **H-NAC** provides better separation between true pairs and hard negatives, highlighting its robustness.
+- In Phase 2, the addition of a **Fusion Transformer** further enhanced performance by enabling deeper modality integration.
+- Frame sampling strategies influenced results depending on the loss used:
+  - **Keyframes** worked best under InfoNCE.
+  - **Mean frames** worked best under H-NAC, achieving the lowest overall alignment loss (**0.0004**).
 
 **Key Insight**:  
 Each phase brought consistent improvements, proving that **even small enhancements—like smarter frame selection or lightweight attention—can significantly boost model performance**, especially when data is limited.
