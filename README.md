@@ -1,4 +1,4 @@
-# Frames Matter: Improving Video-Text Alignment via Fusion and Sampling 
+# Enhancing Video-Text Alignment with ViCLIP: Leveraging Contrastive Learning, Multimodal Fusion and Temporal Keyframe Sampling
 **Group 35 — Sulaiman Ahmad (26100350), Muhammad Bazaf Shakeel (26100146)**
 
 ---
